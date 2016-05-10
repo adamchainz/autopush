@@ -428,6 +428,9 @@ class EndpointHandler(AutoendpointHandler):
 
         """
         api_ver = api_ver or "v0"
+        wpe_url = ("https://developers.google.com/web/updates/2016/03/"
+                   "web-push-encryption")
+        wp_url = "https://tools.ietf.org/html/draft-ietf-webpush-protocol-05"
         self.start_time = time.time()
         crypto_key_header = self.request.headers.get('crypto-key')
         content_encoding = self.request.headers.get('content-encoding', "")
@@ -435,14 +438,44 @@ class EndpointHandler(AutoendpointHandler):
             self.log.debug(
                 format="Invalid crypto state; aesgcm128 + Crypto-Key",
                 status_code=400, errno=110, **self._client_info)
-            wpe_url = ("https://developers.google.com/web/updates/2016/03/"
-                       "web-push-encryption")
             self._write_response(
                 400,
                 110,
                 message="You're using outdated encryption; "
-                "Please update to the format described in " + wpe_url)
+                "Please update to the format described in " + wp_url)
             return
+        # Valid Content-Encoding types. (remember '' is No Content
+        if content_encoding.lower() not in ['aesgcm', 'aesgcm128', '']:
+            self.log.debug(
+                format="Invalid content-type: %s " % content_encoding,
+                status_code=401, errno=110, **self._client_info)
+            self._write_response(
+                400,
+                110,
+                message="Invalid Content-Encoding type; "
+                "Please see " + wpe_url)
+            return
+        # Check TTL
+        if ("ttl" in self.request.headers
+                and not VALID_TTL.match(self.request.headers["ttl"])):
+            self.log.debug(format="Invalid TTL", status_code=401,
+                           errno=112, **self._client_info)
+            self._write_response(
+                400, 112,
+                message="Invalid TTL header; "
+                "Please see " + wp_url + "#section-5.2")
+            return
+        if self.request.headers.get("urgency", "").lower() not in [
+                "", "very-low", "low", "normal", "high"]:
+            self.log.debug(format="Invalid Urgency", status_code=401,
+                           errno=112, **self._client_info)
+            self._write_response(
+                400, 112,
+                message="Invalid Urgency specified; "
+                "Please see " + wp_url + "#section-5.3")
+            return
+        # Topics can either be a token or a quoted string.
+        # When there's something worth checking, we should check them.
 
         d = deferToThread(self.ap_settings.parse_endpoint,
                           token,

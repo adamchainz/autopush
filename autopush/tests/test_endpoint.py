@@ -223,7 +223,7 @@ class EndpointTestCase(unittest.TestCase):
         frouter.route_notification.return_value = RouterResponse()
         self.endpoint.chid = dummy_chid
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
         self.endpoint.ap_settings.routers["test"] = frouter
         self.endpoint._uaid_lookup_results(fresult)
 
@@ -241,7 +241,7 @@ class EndpointTestCase(unittest.TestCase):
         self.endpoint.chid = dummy_chid
         self.request_mock.headers["ttl"] = "woops"
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
         self.endpoint.ap_settings.routers["test"] = frouter
         self.endpoint._uaid_lookup_results(fresult)
 
@@ -249,6 +249,23 @@ class EndpointTestCase(unittest.TestCase):
             self.endpoint.set_status.assert_called_with(400)
 
         self.finish_deferred.addCallback(handle_finish)
+        return self.finish_deferred
+
+    def test_put_bad_ttl(self):
+        frouter = Mock(spec=Router)
+        frouter.route_notification = Mock()
+        frouter.route_notification.return_value = RouterResponse()
+        self.endpoint.chid = dummy_chid
+        self.request_mock.headers["ttl"] = "woops"
+        self.request_mock.headers["encryption"] = "stuff"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
+        self.endpoint.ap_settings.routers["test"] = frouter
+
+        def handle_finish(value):
+            self.endpoint.set_status.assert_called_with(400)
+
+        self.finish_deferred.addCallback(handle_finish)
+        self.endpoint.put(None, dummy_uaid)
         return self.finish_deferred
 
     def test_webpush_ttl_too_large(self):
@@ -260,7 +277,7 @@ class EndpointTestCase(unittest.TestCase):
         self.endpoint.chid = dummy_chid
         self.request_mock.headers["ttl"] = str(MAX_TTL + 100)
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
         self.endpoint.ap_settings.routers["test"] = frouter
         self.endpoint._uaid_lookup_results(fresult)
 
@@ -287,13 +304,27 @@ class EndpointTestCase(unittest.TestCase):
         self.finish_deferred.addCallback(handle_finish)
         return self.finish_deferred
 
+    def test_bad_urgency(self):
+        self.request_mock.headers = {
+            "ttl": "0",
+            "content-encoding": "aesgcm",
+            "urgency": "invalid",
+        }
+
+        def handle_finish(value):
+            self.endpoint.set_status.assert_called_with(400)
+
+        self.finish_deferred.addCallback(handle_finish)
+        self.endpoint.put(None, dummy_uaid)
+        return self.finish_deferred
+
     def test_webpush_missing_ttl_user_offline(self):
         from autopush.router.interface import RouterException
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         del(self.request_mock.headers["ttl"])
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
         self.router_mock.get_uaid.return_value = dict(
             router_type="webpush",
             router_data=dict(),
@@ -323,8 +354,8 @@ class EndpointTestCase(unittest.TestCase):
         def handle_finish(value):
             err_msg = ("You're using outdated encryption; Please update "
                        "to the format described in "
-                       "https://developers.google.com/web/updates/2016/"
-                       "03/web-push-encryption")
+                       "https://tools.ietf.org/html/draft-ietf-webpush-"
+                       "protocol-05")
             self._check_error(400, 110, message=err_msg)
         self.request_mock.headers["content-encoding"] = "aesgcm128"
         self.request_mock.headers["crypto-key"] = "content"
@@ -398,7 +429,7 @@ class EndpointTestCase(unittest.TestCase):
         self.request_mock.headers["crypto-key"] = (
             "keyid=spad=;dh=AQ==,p256ecdsa=Ag=;foo=\"bar==\""
         )
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
         self.request_mock.body = b"\xc3\x28\xa0\xa1"
         self.endpoint._uaid_lookup_results(fresult)
 
@@ -590,8 +621,9 @@ class EndpointTestCase(unittest.TestCase):
 
     def test_put_router_with_headers(self):
         self.request_mock.headers["encryption"] = "ignored"
-        self.request_mock.headers["content-encoding"] = 'text'
+        self.request_mock.headers["content-encoding"] = 'aesgcm128'
         self.request_mock.headers["encryption-key"] = "encKey"
+        self.request_mock.headers["ttl"] = "0"
         self.request_mock.body = b' '
         self.fernet_mock.decrypt.return_value = dummy_token
         self.router_mock.get_uaid.return_value = dict(
@@ -651,9 +683,33 @@ class EndpointTestCase(unittest.TestCase):
         self.endpoint.put(None, dummy_uaid)
         return self.finish_deferred
 
-    def test_put_bogus_headers(self):
+    def test_put_bogus_content_encoding(self):
         self.request_mock.headers["encryption"] = "ignored"
-        self.request_mock.headers["content-encoding"] = 'text'
+        self.request_mock.headers["content-encoding"] = 'bogus'
+        self.request_mock.headers["encryption-key"] = "encKey"
+        self.request_mock.headers["crypto-key"] = "fake=crypKey"
+        self.request_mock.body = b' '
+        self.fernet_mock.decrypt.return_value = dummy_token
+        self.router_mock.get_uaid.return_value = dict(
+            router_type="webpush",
+            router_data=dict(),
+        )
+        self.wp_router_mock.route_notification.return_value = RouterResponse(
+            status_code=200,
+            router_data={},
+        )
+
+        def handle_finish(result):
+            self.assertTrue(result)
+            self.endpoint.set_status.assert_called_with(400)
+
+        self.finish_deferred.addBoth(handle_finish)
+        self.endpoint.put(None, dummy_uaid)
+        return self.finish_deferred
+
+    def test_put_enc_and_crypto_keys(self):
+        self.request_mock.headers["encryption"] = "ignored"
+        self.request_mock.headers["content-encoding"] = 'aesgcm'
         self.request_mock.headers["encryption-key"] = "encKey"
         self.request_mock.headers["crypto-key"] = "fake=crypKey"
         self.request_mock.body = b' '
@@ -677,7 +733,7 @@ class EndpointTestCase(unittest.TestCase):
 
     def test_put_invalid_vapid_crypto_header(self):
         self.request_mock.headers["encryption"] = "ignored"
-        self.request_mock.headers["content-encoding"] = 'text'
+        self.request_mock.headers["content-encoding"] = 'aesgcm'
         self.request_mock.headers["authorization"] = "some auth"
         self.request_mock.headers["crypto-key"] = "crypKey"
         self.request_mock.body = b' '
@@ -701,7 +757,7 @@ class EndpointTestCase(unittest.TestCase):
 
     def test_put_invalid_vapid_crypto_key(self):
         self.request_mock.headers["encryption"] = "ignored"
-        self.request_mock.headers["content-encoding"] = 'text'
+        self.request_mock.headers["content-encoding"] = 'aesgcm'
         self.request_mock.headers["authorization"] = "invalid"
         self.request_mock.headers["crypto-key"] = "crypt=crap"
         self.request_mock.body = b' '
@@ -725,7 +781,7 @@ class EndpointTestCase(unittest.TestCase):
 
     def test_put_invalid_vapid_auth_header(self):
         self.request_mock.headers["encryption"] = "ignored"
-        self.request_mock.headers["content-encoding"] = 'text'
+        self.request_mock.headers["content-encoding"] = 'aesgcm'
         self.request_mock.headers["authorization"] = "invalid"
         self.request_mock.headers["crypto-key"] = "p256ecdsa=crap"
         self.request_mock.body = b' '
@@ -751,7 +807,7 @@ class EndpointTestCase(unittest.TestCase):
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
         self.router_mock.get_uaid.return_value = dict(
             router_type="webpush",
             router_data=dict(),
@@ -782,7 +838,7 @@ class EndpointTestCase(unittest.TestCase):
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
 
         header = {"typ": "JWT", "alg": "ES256"}
         payload = {"aud": "https://pusher_origin.example.com",
@@ -846,7 +902,7 @@ class EndpointTestCase(unittest.TestCase):
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
 
         header = {"typ": "JWT", "alg": "ES256"}
         payload = {"aud": "https://pusher_origin.example.com",
@@ -878,7 +934,7 @@ class EndpointTestCase(unittest.TestCase):
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
 
         header = {"typ": "JWT", "alg": "ES256"}
         payload = {"aud": "https://pusher_origin.example.com",
@@ -910,7 +966,7 @@ class EndpointTestCase(unittest.TestCase):
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
 
         header = {"typ": "JWT", "alg": "ES256"}
         payload = {"aud": "https://pusher_origin.example.com",
@@ -957,7 +1013,7 @@ class EndpointTestCase(unittest.TestCase):
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
 
         header = {"typ": "JWT", "alg": "ES256"}
         payload = {"aud": "https://pusher_origin.example.com",
@@ -991,7 +1047,7 @@ class EndpointTestCase(unittest.TestCase):
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
 
         header = {"typ": "JWT", "alg": "ES256"}
         payload = {"aud": "https://pusher_origin.example.com",
@@ -1023,7 +1079,7 @@ class EndpointTestCase(unittest.TestCase):
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
         self.request_mock.headers["crypto-key"] = ""
         self.router_mock.get_uaid.return_value = dict(
             router_type="webpush",
@@ -1048,7 +1104,7 @@ class EndpointTestCase(unittest.TestCase):
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
         self.router_mock.get_uaid.return_value = dict(
             router_type="webpush",
             router_data=dict(),
@@ -1075,7 +1131,7 @@ class EndpointTestCase(unittest.TestCase):
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
         self.router_mock.get_uaid.return_value = dict(
             router_type="webpush",
             router_data=dict(),
@@ -1104,7 +1160,7 @@ class EndpointTestCase(unittest.TestCase):
         self.fernet_mock.decrypt.return_value = dummy_token
         self.endpoint.set_header = Mock()
         self.request_mock.headers["encryption"] = "stuff"
-        self.request_mock.headers["content-encoding"] = "aes128"
+        self.request_mock.headers["content-encoding"] = "aesgcm"
         self.router_mock.get_uaid.return_value = dict(
             router_type="webpush",
             router_data=dict(),
